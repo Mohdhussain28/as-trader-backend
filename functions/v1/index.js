@@ -28,9 +28,9 @@ app.use((err, req, res, next) => {
     res.status(err.statusCode || 500).send(err.message || "Unexpected error!");
 });
 
-module.exports = functions.https.onRequest(app);
-// const PORT = process.env.PORT || 6000;
+// module.exports = functions.https.onRequest(app);
+const PORT = process.env.PORT || 3000;
 
-// app.listen(PORT, () => {
-//     console.log(`Server is running on http://localhost:${PORT}`);
-// });
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+});

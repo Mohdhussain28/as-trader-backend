@@ -6,22 +6,113 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const cron = require('node-cron');
 
-
 const multerStorage = multer.memoryStorage();
 const upload = multer({ storage: multerStorage });
 
-const signup = async (req, res) => {
-    const { sponsorId, name, email } = req.body;
-    const userId = req.user.uid || "test-user"
+const signUpUser = async (req, res) => {
+    try {
+        const { email, password, sponsorId } = req.body;
+
+        if (!email || !password || !sponsorId) {
+            return res.status(400).send('Missing required fields');
+        }
+
+        // Validate sponsorId
+        const sponsorRef = db.collection('users').doc(sponsorId);
+        const sponsorDoc = await sponsorRef.get();
+
+        if (!sponsorDoc.exists) {
+            return res.status(400).send('Invalid sponsor ID');
+        }
+
+        // Create a new user in Firebase Authentication
+        const userRecord = await admin.auth().createUser({
+            email,
+            password,
+        });
+
+        const userId = userRecord.uid;
+
+        // Create a new user document in Firestore
+        const newUser = {
+            email,
+            referredBy: sponsorId,
+            levelIncome: 0,
+            walletBalance: 0,
+            createdAt: new Date().toISOString(),
+        };
+
+        await db.collection('users').doc(userId).set(newUser);
+
+        // Calculate referral bonuses
+        await calculateReferralBonus(userId, 0); // Initial amount for referral bonus calculation
+
+        res.status(201).send({ message: 'User signed up successfully', user: newUser });
+    } catch (error) {
+        res.status(500).send({ message: 'Error signing up user', error: error.message });
+    }
+};
+
+
+
+const updateProfile = async (req, res) => {
+    const { fullName, email, mobile, address, city, state, country } = req.body;
+    const userId = "test-user"; // Replace with actual user ID retrieval logic
 
     try {
+        // Handle profile image upload
+        let imageUrl = null;
+        if (req.file) {
+            // console.log('File received:', req.file);
+            const ext = path.extname(req.file.originalname);
+            const fileName = `${uuidv4()}${ext}`;
+            const file = bucket.file(fileName);
+
+            await file.save(req.file.buffer, {
+                metadata: { contentType: req.file.mimetype }
+            });
+
+            imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        }
+
+        // Check if user document exists
         const userDoc = db.collection('users').doc(userId);
-        await userDoc.set({ userId, email, name, sponsorId, level: 1, income: 0 });
-        res.status(201).send('User signed up successfully');
+        const doc = await userDoc.get();
+
+        if (doc.exists) {
+            // Update existing user profile
+            await userDoc.update({
+                fullName: fullName || doc.data().fullName, // Preserve existing value if not provided
+                email: email || doc.data().email,
+                mobile: mobile || doc.data().mobile,
+                address: address || doc.data().address,
+                city: city || doc.data().city,
+                state: state || doc.data().state,
+                country: country || doc.data().country,
+                profileImage: imageUrl || doc.data().profileImage // Preserve existing image URL if not provided
+            });
+        } else {
+            // Create a new user profile
+            await userDoc.set({
+                fullName,
+                email,
+                mobile,
+                address,
+                city,
+                state,
+                country,
+                profileImage: imageUrl || null // Set imageUrl if available, otherwise null
+            });
+        }
+
+        res.status(200).send('User profile updated successfully');
     } catch (err) {
-        res.status(500).send({ error: 'Error signing up user' });
+        console.error(err);
+        res.status(500).send({ error: 'Error updating user profile' });
     }
-}
+};
+
+
 
 const partnerList = async (req, res) => {
     const { sponsorId } = req.params;
@@ -59,10 +150,85 @@ const createDashboard = async (req, res) => {
     }
 }
 
-// Function to handle package purchase
+const sendNotification = async (title, message, topic) => {
+    const payload = {
+        notification: {
+            title: title,
+            body: message,
+        }
+    };
+
+    try {
+        const response = await admin.messaging().sendToTopic(topic, payload);
+        console.log('Notification sent successfully:', response);
+    } catch (error) {
+        console.error('Error sending notification:', error);
+    }
+};
+const roitest = async (req, res) => {
+    try {
+        await updateDailyROI();
+        res.status(200).send('ROI Update Triggered');
+    } catch (error) {
+        res.status(500).send('Error Triggering ROI Update');
+    }
+};
+
+
+const calculateReferralBonus = async (userId, amount) => {
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) return;
+
+    const userData = userDoc.data();
+    const referredBy = userData.referredBy;
+
+    if (referredBy) {
+        const firstLevelBonus = amount * 0.05; // 5% bonus
+        await db.runTransaction(async (transaction) => {
+            const referrerDoc = await transaction.get(db.collection('users').doc(referredBy));
+            if (!referrerDoc.exists) throw new Error('Referrer does not exist');
+
+            const newLevelIncome = (referrerDoc.data().levelIncome || 0) + firstLevelBonus;
+            transaction.update(db.collection('users').doc(referredBy), { levelIncome: newLevelIncome });
+        });
+
+        // Second level
+        const firstReferrerDoc = await db.collection('users').doc(referredBy).get();
+        const secondReferredBy = firstReferrerDoc.data().referredBy;
+
+        if (secondReferredBy) {
+            const secondLevelBonus = amount * 0.03; // 3% bonus
+            await db.runTransaction(async (transaction) => {
+                const secondReferrerDoc = await transaction.get(db.collection('users').doc(secondReferredBy));
+                if (!secondReferrerDoc.exists) throw new Error('Second referrer does not exist');
+
+                const newLevelIncome = (secondReferrerDoc.data().levelIncome || 0) + secondLevelBonus;
+                transaction.update(db.collection('users').doc(secondReferredBy), { walletBalance: newLevelIncome });
+            });
+
+            // Third level
+            const secondReferrerDoc = await db.collection('users').doc(secondReferredBy).get();
+            const thirdReferredBy = secondReferrerDoc.data().referredBy;
+
+            if (thirdReferredBy) {
+                const thirdLevelBonus = amount * 0.01; // 1% bonus
+                await db.runTransaction(async (transaction) => {
+                    const thirdReferrerDoc = await transaction.get(db.collection('users').doc(thirdReferredBy));
+                    if (!thirdReferrerDoc.exists) throw new Error('Third referrer does not exist');
+
+                    const newLevelIncome = (thirdReferrerDoc.data().levelIncome || 0) + thirdLevelBonus;
+                    transaction.update(db.collection('users').doc(thirdReferredBy), { levelIncome: newLevelIncome });
+                });
+            }
+        }
+    }
+};
+
 const buyPackage = async (req, res) => {
     try {
-        const userId = req.user?.uid || "test-user";
+        const userId = req.user?.uid || "test-user-2";
         const { packageName, amount, dailyIncome, totalRevenue, duration } = req.body;
 
         if (!userId || !packageName || !amount || !dailyIncome || !totalRevenue || !duration) {
@@ -79,18 +245,21 @@ const buyPackage = async (req, res) => {
             dailyIncome,
             duration,
             totalRevenue,
-            status: 'pending', // To be activated by the admin
+            status: 'pending',
             createdAt: new Date().toISOString(),
-            roiAccumulated: 0, // Track accumulated ROI for the first 20 days
-            roiUpdatedDays: 0, // Track the total number of days ROI updates have been made
-            walletUpdated: false, // Track if the wallet has been updated after 30 days
-            startDate: null // Track when the package is activated
+            roiAccumulated: 0,
+            roiUpdatedDays: 0,
+            walletUpdated: false,
+            startDate: null
         };
 
         // Save the new purchase request to Firestore
         await db.collection('purchases').doc(purchaseId).set(newPurchase);
 
-        // Notify admin (this is a placeholder, replace with actual notification logic)
+        // Calculate referral bonuses
+        await calculateReferralBonus(userId, amount);
+
+        // Notify admin 
         console.log('Notify admin about the new purchase');
 
         res.status(201).send({ message: 'Package purchase request created successfully', purchase: newPurchase });
@@ -101,8 +270,9 @@ const buyPackage = async (req, res) => {
 
 // Function to update daily ROI
 const updateDailyROI = async () => {
-    const userId = "test-user"
-    const purchasesSnapshot = await db.collection('purchases').where('status', '==', 'active').get();
+    const purchasesSnapshot = await db.collection('purchases')
+        .where('status', '==', 'active')
+        .get();
 
     purchasesSnapshot.forEach(async (doc) => {
         const purchase = doc.data();
@@ -150,11 +320,20 @@ const updateDailyROI = async () => {
     });
 };
 
+
 // Schedule the updateDailyROI function to run once every day at midnight
 cron.schedule('0 0 * * *', () => {
     console.log('Running daily ROI update');
     updateDailyROI().catch(console.error);
 });
+
+//for every minute to test
+// cron.schedule('* * * * *', () => {
+//     console.log('Running daily ROI update');
+//     updateDailyROI().catch(console.error);
+// });
+
+
 
 // Function to activate the package (called by admin)
 const activatePackage = async (req, res) => {
@@ -194,8 +373,8 @@ const withdrawAmount = async (req, res) => {
         const userId = req.user?.uid || "test-user";
         const { amount } = req.body;
 
-        if (!userId || !amount || amount <= 0) {
-            return res.status(400).send('Invalid amount');
+        if (!userId || !amount || amount <= 0 || amount < 500) {
+            return res.status(400).send('Invalid amount, minimum withdrawal is 500');
         }
 
         // Generate a new withdrawal ID
@@ -221,9 +400,10 @@ const withdrawAmount = async (req, res) => {
     }
 };
 
+
 const getTransactions = async (req, res) => {
     try {
-        const userId = req.user?.uid || "test-user"; // Ensure you handle authentication properly
+        const userId = req.user?.uid || "test-user";
         const { dateFrom, dateTo, operation, status } = req.query;
 
         const filters = [];
@@ -319,19 +499,19 @@ const createTicket = async (req, res) => {
     try {
         // console.log("Full Request Object:", req);
         const userId = "test-user";
-        const { topic, status, ticketNo } = req.body;
-        const ticketImage = req.file;
+        const { topic, status, ticketNo, message } = req.body;
+        const file = req.file;
         // console.log("object11", req.file)
         // console.log("object12", req.body)
-        if (!topic || !status || !ticketNo) {
+        if (!topic || !status || !ticketNo || !message) {
             return res.status(400).send('Missing required fields');
         }
 
         const ticketId = db.collection('tickets').doc().id;
 
         let imageUrl = '';
-        if (ticketImage) {
-            imageUrl = await uploadImage(ticketImage);
+        if (file) {
+            imageUrl = await uploadImage(file);
         }
 
         const newTicket = {
@@ -340,6 +520,7 @@ const createTicket = async (req, res) => {
             topic,
             status,
             ticketNo,
+            message,
             dateAndTime: new Date().toISOString(),
             imageUrl
         };
@@ -412,4 +593,21 @@ const filterTransactions = async (req, res) => {
 }
 
 
-module.exports = { upload, getDashboard, createDashboard, getTransactions, createTicket, buyPackage, withdrawAmount, getPurchaseStatus, getTickets, signup, partnerList, allTransactions, filterTransactions };
+module.exports =
+{
+    upload,
+    signUpUser,
+    updateProfile,
+    roitest,
+    getDashboard,
+    createDashboard,
+    getTransactions,
+    createTicket,
+    buyPackage,
+    withdrawAmount,
+    getPurchaseStatus,
+    getTickets,
+    partnerList,
+    allTransactions,
+    filterTransactions
+};
