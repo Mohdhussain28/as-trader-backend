@@ -21,7 +21,7 @@ router.route("/transactions/filter").get(filterTransactions)
 router.route("/triggerROIUpdate").post(roitest)
 router.post('/update-profile', upload.single('profile_image'), updateProfile);
 
-router.route("/generatereferrallink").post(generateReferralLink)
+router.route("/generatereferrallink").get(generateReferralLink)
 // router.route("/generateReferralCodes").post(generateReferralCodes)
 // router.route("/initializeReferralCodes").post(initializeReferralCodesForAllUsers)
 

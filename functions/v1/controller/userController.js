@@ -26,62 +26,70 @@ const upload = multer({ storage: multerStorage });
 //     return referralCode;
 // };
 
-const generateReferralCode = async () => {
+const generateReferralCode = async (userId) => {
     const prefix = "AS";
-    let unique = false;
-    let referralCode;
-
-    while (!unique) {
-        const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString(); // Generates an 8-digit number
-        referralCode = `${prefix}${randomDigits}`;
-
-        // Check if the code already exists in the database
-        const existingCodeSnapshot = await db.collection('referralCodes').doc(referralCode).get();
-        if (!existingCodeSnapshot.exists) {
-            unique = true;
-        }
-    }
+    const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString(); // Generates an 8-digit number
+    const referralCode = `${prefix}${randomDigits}`;
 
     // Store the generated referral code in the referralCodes collection
-    await db.collection('referralCodes').doc(referralCode).set({ used: false });
+    await db.collection('referralCodes').doc(referralCode).set({ userId, used: false });
 
     return referralCode;
 };
+
 const generateReferralLink = async (req, res) => {
     try {
-        const prefix = "AS";
-        let unique = false;
-        let referralCode;
+        const userId = "zww9lZVJTXZMIsg1wAKE4pjMqR32";
+        const sponsorId = await getSponsorId(userId);
 
-        while (!unique) {
-            const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString(); // Generates an 8-digit number
-            referralCode = `${prefix}${randomDigits}`;
-
-            // Check if the code already exists in the database
-            const existingCodeSnapshot = await db.collection('referralCodes').doc(referralCode).get();
-            if (!existingCodeSnapshot.exists) {
-                unique = true;
-            }
+        if (!sponsorId) {
+            return res.status(404).send({ message: 'Sponsor ID not found' });
         }
 
-        // Store the generated referral code in the referralCodes collection
-        await db.collection('referralCodes').doc(referralCode).set({ used: false });
-
-        // Return the referral link
-        return res.status(201).send(`https://hyipland.com/sign-up/?ref=${referralCode}`)
+        res.status(200).send(`https://hyipland.com/?ref=${sponsorId}`);
     } catch (error) {
-        res.status(500).send({ error: error.message })
+        res.status(500).send({ message: 'Error retrieving sponsor ID', error: error.message });
     }
+}
+
+const getSponsorId = async (userId) => {
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+        throw new Error('User does not exist');
+    }
+
+    const userData = userDoc.data();
+    return userData.sponsorId;
 };
+
+// // API endpoint to get sponsorId of a user
+// router.get('/api/user/:userId/sponsorId', async (req, res) => {
+//     try {
+//         const userId = req.params.userId;
+//         const sponsorId = await getSponsorId(userId);
+
+//         if (!sponsorId) {
+//             return res.status(404).send({ message: 'Sponsor ID not found' });
+//         }
+
+//         res.status(200).send({ sponsorId });
+//     } catch (error) {
+//         res.status(500).send({ message: 'Error retrieving sponsor ID', error: error.message });
+//     }
+// });
 
 const validateReferralCode = async (referralCode) => {
     const referralDoc = await db.collection('referralCodes').doc(referralCode).get();
     return referralDoc.exists;
 };
 
+
 const deleteReferralCode = async (referralCode) => {
     await db.collection('referralCodes').doc(referralCode).delete();
 };
+
 
 const signUpUser = async (req, res) => {
     try {
@@ -108,25 +116,25 @@ const signUpUser = async (req, res) => {
         // Create a new user document in Firestore
         const newUser = {
             email,
-            referredBy: sponsorId,
+            sponsorId: sponsorId,
             levelIncome: 0,
+            level: 1,
             walletBalance: 0,
+            userId,
             createdAt: new Date().toISOString(),
         };
 
         await db.collection('users').doc(userId).set(newUser);
 
-        // Delete used referral code
-        await deleteReferralCode(sponsorId);
-
-        // Generate a new referral code for the new user
-        const newReferralCode = await generateReferralCode();
+        // Generate a referral code for the new user
+        const newReferralCode = await generateReferralCode(userId);
 
         res.status(201).send({ message: 'User signed up successfully', user: newUser, referralCode: newReferralCode });
     } catch (error) {
         res.status(500).send({ message: 'Error signing up user', error: error.message });
     }
 };
+
 
 
 
@@ -188,16 +196,34 @@ const updateProfile = async (req, res) => {
 };
 
 
+const getReferredUsers = async (sponsorId) => {
+    const usersRef = db.collection('users');
+    const snapshot = await usersRef.where('sponsorId', '==', sponsorId).get();
+
+    if (snapshot.empty) {
+        return [];
+    }
+
+    let referredUsers = [];
+    snapshot.forEach(doc => {
+        referredUsers.push({ id: doc.id, ...doc.data() });
+    });
+
+    return referredUsers;
+};
 
 const partnerList = async (req, res) => {
-    const { sponsorId } = req.params;
     try {
-        const referralsSnapshot = await db.collection('users').where('sponsorId', '==', sponsorId).get();
-        const referrals = [];
-        referralsSnapshot.forEach(doc => referrals.push(doc.data()));
-        res.json(referrals);
-    } catch (err) {
-        res.status(500).send({ error: 'Error fetching referrals' });
+        const sponsorId = req.query.sponsorId;
+        const referredUsers = await getReferredUsers(sponsorId);
+
+        if (referredUsers.length === 0) {
+            return res.status(404).send({ message: 'No referred users found' });
+        }
+
+        res.status(200).send(referredUsers);
+    } catch (error) {
+        res.status(500).send({ message: 'Error retrieving referred users', error: error.message });
     }
 }
 
