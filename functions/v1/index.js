@@ -17,7 +17,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // app.use(express.json());
 
 
-// app.use(authMiddleware);
+app.use(authMiddleware);
 app.use("/user", require('./routes/userRoute'))
 
 app.get("/test", async (req, res) => {
