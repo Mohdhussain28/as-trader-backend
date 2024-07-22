@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router()
-const { upload, getDashboard, createDashboard, createTicket, buyPackage, getPurchaseStatus, getTickets, signUpUser, partnerList, allTransactions, filterTransactions, uploadFiles, withdrawAmount, getTransactions, roitest, updateProfile, generateReferralCodes, initializeReferralCodesForAllUsers } = require("../controller/userController");
+const { upload, getDashboard, createDashboard, createTicket, buyPackage, getPurchaseStatus, getTickets, signUpUser, partnerList, allTransactions, filterTransactions, uploadFiles, withdrawAmount, getTransactions, roitest, updateProfile, generateReferralLink } = require("../controller/userController");
 
 router.route("/get-dashboard").get(getDashboard)
 router.route("/create-dashboard").post(createDashboard)
@@ -21,7 +21,8 @@ router.route("/transactions/filter").get(filterTransactions)
 router.route("/triggerROIUpdate").post(roitest)
 router.post('/update-profile', upload.single('profile_image'), updateProfile);
 
-router.route("/generateReferralCodes").post(generateReferralCodes)
-router.route("/initializeReferralCodes").post(initializeReferralCodesForAllUsers)
+router.route("/generatereferrallink").post(generateReferralLink)
+// router.route("/generateReferralCodes").post(generateReferralCodes)
+// router.route("/initializeReferralCodes").post(initializeReferralCodesForAllUsers)
 
 module.exports = router;

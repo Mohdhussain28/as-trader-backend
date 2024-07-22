@@ -9,6 +9,80 @@ const cron = require('node-cron');
 const multerStorage = multer.memoryStorage();
 const upload = multer({ storage: multerStorage });
 
+// const generateReferralCode = async () => {
+//     let referralCode;
+//     let codeExists = true;
+
+//     while (codeExists) {
+//         referralCode = uuidv4().split('-')[0];
+//         const referralDoc = await db.collection('referrals').doc(referralCode).get();
+//         codeExists = referralDoc.exists;
+//     }
+
+//     await db.collection('referrals').doc(referralCode).set({
+//         createdAt: new Date().toISOString()
+//     });
+
+//     return referralCode;
+// };
+
+const generateReferralCode = async () => {
+    const prefix = "AS";
+    let unique = false;
+    let referralCode;
+
+    while (!unique) {
+        const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString(); // Generates an 8-digit number
+        referralCode = `${prefix}${randomDigits}`;
+
+        // Check if the code already exists in the database
+        const existingCodeSnapshot = await db.collection('referralCodes').doc(referralCode).get();
+        if (!existingCodeSnapshot.exists) {
+            unique = true;
+        }
+    }
+
+    // Store the generated referral code in the referralCodes collection
+    await db.collection('referralCodes').doc(referralCode).set({ used: false });
+
+    return referralCode;
+};
+const generateReferralLink = async (req, res) => {
+    try {
+        const prefix = "AS";
+        let unique = false;
+        let referralCode;
+
+        while (!unique) {
+            const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString(); // Generates an 8-digit number
+            referralCode = `${prefix}${randomDigits}`;
+
+            // Check if the code already exists in the database
+            const existingCodeSnapshot = await db.collection('referralCodes').doc(referralCode).get();
+            if (!existingCodeSnapshot.exists) {
+                unique = true;
+            }
+        }
+
+        // Store the generated referral code in the referralCodes collection
+        await db.collection('referralCodes').doc(referralCode).set({ used: false });
+
+        // Return the referral link
+        return res.status(201).send(`https://hyipland.com/sign-up/?ref=${referralCode}`)
+    } catch (error) {
+        res.status(500).send({ error: error.message })
+    }
+};
+
+const validateReferralCode = async (referralCode) => {
+    const referralDoc = await db.collection('referralCodes').doc(referralCode).get();
+    return referralDoc.exists;
+};
+
+const deleteReferralCode = async (referralCode) => {
+    await db.collection('referralCodes').doc(referralCode).delete();
+};
+
 const signUpUser = async (req, res) => {
     try {
         const { email, password, sponsorId } = req.body;
@@ -18,10 +92,8 @@ const signUpUser = async (req, res) => {
         }
 
         // Validate sponsorId
-        const sponsorRef = db.collection('users').doc(sponsorId);
-        const sponsorDoc = await sponsorRef.get();
-
-        if (!sponsorDoc.exists) {
+        const isValidReferral = await validateReferralCode(sponsorId);
+        if (!isValidReferral) {
             return res.status(400).send('Invalid sponsor ID');
         }
 
@@ -44,10 +116,13 @@ const signUpUser = async (req, res) => {
 
         await db.collection('users').doc(userId).set(newUser);
 
-        // Calculate referral bonuses
-        await calculateReferralBonus(userId, 0); // Initial amount for referral bonus calculation
+        // Delete used referral code
+        await deleteReferralCode(sponsorId);
 
-        res.status(201).send({ message: 'User signed up successfully', user: newUser });
+        // Generate a new referral code for the new user
+        const newReferralCode = await generateReferralCode();
+
+        res.status(201).send({ message: 'User signed up successfully', user: newUser, referralCode: newReferralCode });
     } catch (error) {
         res.status(500).send({ message: 'Error signing up user', error: error.message });
     }
@@ -609,5 +684,6 @@ module.exports =
     getTickets,
     partnerList,
     allTransactions,
-    filterTransactions
+    filterTransactions,
+    generateReferralLink
 };
