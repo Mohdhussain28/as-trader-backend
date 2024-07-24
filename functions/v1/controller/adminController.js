@@ -8,13 +8,11 @@ const path = require('path');
 const multerStorage = multer.memoryStorage();
 const upload = multer({ storage: multerStorage });
 
-
 const approvePurchase = async (req, res) => {
     try {
         const { purchaseId } = req.body;
-
         if (!purchaseId) {
-            return res.status(400).send('Missing purchase ID');
+            return res.status(400).send('Missing required fields');
         }
 
         const purchaseRef = db.collection('purchases').doc(purchaseId);
@@ -24,15 +22,22 @@ const approvePurchase = async (req, res) => {
             return res.status(404).send('Purchase not found');
         }
 
-        // Update purchase status to approved
-        await purchaseRef.update({ status: 'approved' });
+        const purchase = purchaseDoc.data();
+        if (purchase.status !== 'pending') {
+            return res.status(400).send('Package is already activated or completed');
+        }
 
-        res.status(200).send({ message: 'Purchase approved successfully' });
+        // Activate the package
+        await purchaseRef.update({
+            status: 'active',
+            startDate: new Date().toISOString()
+        });
+
+        res.status(200).send({ message: 'Package activated successfully' });
     } catch (error) {
-        res.status(500).send({ message: 'Error approving purchase', error: error.message });
+        res.status(500).send({ message: 'Error activating package', error: error.message });
     }
 };
-
 
 
 module.exports = { upload, approvePurchase };

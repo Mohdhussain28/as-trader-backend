@@ -26,6 +26,25 @@ const upload = multer({ storage: multerStorage });
 //     return referralCode;
 // };
 
+const getUserDetail = async (req, res) => {
+    const userId = req.user?.uid;
+
+    try {
+        const userRef = db.collection('users').doc(userId);
+        const doc = await userRef.get();
+
+        if (!doc.exists) {
+            res.status(404).send('User not found');
+        } else {
+            res.status(200).json(doc.data());
+        }
+    } catch (error) {
+        console.error('Error getting user:', error);
+        res.status(500).send('Internal Server Error');
+    }
+}
+
+
 const generateReferralCode = async (userId) => {
     const prefix = "AS";
     const randomDigits = Math.floor(10000000 + Math.random() * 90000000).toString();
@@ -118,7 +137,7 @@ const authVerifier = async (req, res) => {
 
 const signUpUser = async (req, res) => {
     try {
-        const { email, password, sponsorId, name } = req.body;
+        const { email, password, sponsorId, fullName } = req.body;
 
         if (!email || !password || !sponsorId) {
             return res.status(400).send('Missing required fields');
@@ -141,7 +160,7 @@ const signUpUser = async (req, res) => {
         // Create a new user document in Firestore
         const newUser = {
             email,
-            name,
+            fullName,
             referredBy: sponsorId,
             levelIncome: 0,
             level: 1,
@@ -379,14 +398,18 @@ const calculateReferralBonus = async (userId, amount) => {
 
 const buyPackage = async (req, res) => {
     try {
-        const userId = req.user?.uid;
+        const userId = req.user?.uid || "test-user";
         const { packageName, amount, dailyIncome, totalRevenue, duration } = req.body;
+        const file = req.file; // Assuming the file is uploaded as 'file' field
 
         if (!userId || !packageName || !amount || !dailyIncome || !totalRevenue || !duration) {
             return res.status(400).send('Missing required fields');
         }
 
         const purchaseId = uuidv4();
+
+        // Upload the payment image
+        const paymentImageUrl = await uploadImage(file);
 
         const newPurchase = {
             id: purchaseId,
@@ -401,7 +424,8 @@ const buyPackage = async (req, res) => {
             roiAccumulated: 0,
             roiUpdatedDays: 0,
             walletUpdated: false,
-            startDate: null
+            startDate: null,
+            paymentImageUrl // Store the image URL
         };
 
         // Save the new purchase request to Firestore
@@ -418,6 +442,7 @@ const buyPackage = async (req, res) => {
         res.status(500).send({ message: 'Error creating purchase request', error: error.message });
     }
 };
+
 
 // Function to update daily ROI
 const updateDailyROI = async () => {
@@ -483,41 +508,6 @@ cron.schedule('0 0 * * *', () => {
 //     console.log('Running daily ROI update');
 //     updateDailyROI().catch(console.error);
 // });
-
-
-
-// Function to activate the package (called by admin)
-const activatePackage = async (req, res) => {
-    try {
-        const { purchaseId } = req.body;
-        if (!purchaseId) {
-            return res.status(400).send('Missing required fields');
-        }
-
-        const purchaseRef = db.collection('purchases').doc(purchaseId);
-        const purchaseDoc = await purchaseRef.get();
-
-        if (!purchaseDoc.exists) {
-            return res.status(404).send('Purchase not found');
-        }
-
-        const purchase = purchaseDoc.data();
-        if (purchase.status !== 'pending') {
-            return res.status(400).send('Package is already activated or completed');
-        }
-
-        // Activate the package
-        await purchaseRef.update({
-            status: 'active',
-            startDate: new Date().toISOString()
-        });
-
-        res.status(200).send({ message: 'Package activated successfully' });
-    } catch (error) {
-        res.status(500).send({ message: 'Error activating package', error: error.message });
-    }
-};
-
 
 const withdrawAmount = async (req, res) => {
     try {
@@ -649,7 +639,7 @@ const uploadImage = (file) => {
 const createTicket = async (req, res) => {
     try {
         // console.log("Full Request Object:", req);
-        const userId = req.user?.uid;
+        const userId = req.user?.uid || "test-user";
         const { topic, status, ticketNo, message } = req.body;
         const file = req.file;
         // console.log("object11", req.file)
@@ -762,5 +752,6 @@ module.exports =
     allTransactions,
     filterTransactions,
     generateReferralLink,
-    authVerifier
+    authVerifier,
+    getUserDetail
 };
