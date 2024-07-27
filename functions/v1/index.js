@@ -54,7 +54,8 @@ app.post("/signup", async (req, res) => {
         const dashboardData = {
             awardReward: 0,
             directMembers: 0,
-            levelIncome: 1,
+            levelIncome: 0,
+            level: 1,
             roi: 0,
             roiWallet: 0,
             totalDownline: 0,

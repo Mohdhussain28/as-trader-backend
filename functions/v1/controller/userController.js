@@ -64,7 +64,7 @@ const generateReferralLink = async (req, res) => {
             return res.status(404).send({ message: 'Sponsor ID not found' });
         }
 
-        res.status(200).send(`https://hyipland.com/?ref=${sponsorId}`);
+        res.status(200).send(`http://astrademumbai.com/sign-up.html/?ref=${sponsorId}`);
     } catch (error) {
         res.status(500).send({ message: 'Error retrieving sponsor ID', error: error.message });
     }
@@ -375,7 +375,7 @@ const buyPackage = async (req, res) => {
         const purchaseId = uuidv4();
         const paymentImageUrl = await uploadImage(file);
 
-        const userDoc = await db.collection("user").doc(userId).get();
+        const userDoc = await db.collection("users").doc(userId).get();
 
         if (!userDoc.exists) {
             return res.status(404).send('User not found');
