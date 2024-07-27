@@ -121,74 +121,24 @@ const authVerifier = async (req, res) => {
         return res.status(400).send('Authorization header is missing');
     }
 
-    const token = authHeader;  // Directly use the authHeader value as the token
-
+    const token = authHeader;
     try {
         const decodedToken = await admin.auth().verifyIdToken(token);
         res.status(200).json({
             uid: decodedToken.uid,
             email: decodedToken.email,
-            // Add other claims if needed
         });
     } catch (error) {
         res.status(401).send('Invalid or expired token');
     }
 }
 
-const signUpUser = async (req, res) => {
-    try {
-        const { email, password, sponsorId, fullName } = req.body;
-
-        if (!email || !password || !sponsorId) {
-            return res.status(400).send('Missing required fields');
-        }
-
-        // Validate sponsorId
-        const isValidReferral = await validateReferralCode(sponsorId);
-        if (!isValidReferral) {
-            return res.status(400).send('Invalid sponsor ID');
-        }
-
-        // Create a new user in Firebase Authentication
-        const userRecord = await admin.auth().createUser({
-            email,
-            password,
-        });
-
-        const userId = userRecord.uid;
-
-        // Create a new user document in Firestore
-        const newUser = {
-            email,
-            fullName,
-            referredBy: sponsorId,
-            levelIncome: 0,
-            level: 1,
-            walletBalance: 0,
-            userId,
-            createdAt: new Date().toISOString(),
-        };
-
-        await db.collection('users').doc(userId).set(newUser);
-
-        // Generate a referral code for the new user
-        const newReferralCode = await generateReferralCode(userId);
-
-        res.status(201).send({ message: 'User signed up successfully', user: newUser, referralCode: newReferralCode });
-    } catch (error) {
-        res.status(500).send({ message: 'Error signing up user', error: error.message });
-    }
-};
-
-
-
 
 const updateProfile = async (req, res) => {
     const { fullName, email, mobile, address, city, state, country } = req.body;
-    const userId = req.user?.uid; // Replace with actual user ID retrieval logic
+    const userId = req.user?.uid;
 
     try {
-        // Handle profile image upload
         let imageUrl = null;
         if (req.file) {
             // console.log('File received:', req.file);
@@ -203,24 +153,21 @@ const updateProfile = async (req, res) => {
             imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
         }
 
-        // Check if user document exists
         const userDoc = db.collection('users').doc(userId);
         const doc = await userDoc.get();
 
         if (doc.exists) {
-            // Update existing user profile
             await userDoc.update({
-                fullName: fullName || doc.data().fullName, // Preserve existing value if not provided
+                fullName: fullName || doc.data().fullName,
                 email: email || doc.data().email,
                 mobile: mobile || doc.data().mobile,
                 address: address || doc.data().address,
                 city: city || doc.data().city,
                 state: state || doc.data().state,
                 country: country || doc.data().country,
-                profileImage: imageUrl || doc.data().profileImage // Preserve existing image URL if not provided
+                profileImage: imageUrl || doc.data().profileImage
             });
         } else {
-            // Create a new user profile
             await userDoc.set({
                 fullName,
                 email,
@@ -229,7 +176,7 @@ const updateProfile = async (req, res) => {
                 city,
                 state,
                 country,
-                profileImage: imageUrl || null // Set imageUrl if available, otherwise null
+                profileImage: imageUrl || null
             });
         }
 
@@ -275,15 +222,22 @@ const partnerList = async (req, res) => {
 const getDashboard = async (req, res) => {
     try {
         const userId = req.user?.uid;
-        const doc = await db.collection('dashboard').doc(userId).get();
+        if (!userId) {
+            return res.status(400).send('User ID is required');
+        }
+
+        const doc = await db.collection('users').doc(userId).collection('dashboard').doc('current').get();
+
         if (!doc.exists) {
             return res.status(404).send('No data found');
         }
+
         res.status(200).send(doc.data());
     } catch (error) {
         res.status(500).send('Error getting data: ' + error.message);
     }
 }
+
 
 const createDashboard = async (req, res) => {
     try {
@@ -322,94 +276,112 @@ const roitest = async (req, res) => {
 
 
 const calculateReferralBonus = async (userId, amount) => {
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
+    try {
+        const userRef = db.collection('users').doc(userId);
+        const userDoc = await userRef.get();
 
-    if (!userDoc.exists) return;
+        if (!userDoc.exists) return;
 
-    const userData = userDoc.data();
-    const referredBy = userData.referredBy;
+        const userData = userDoc.data();
+        const referredBy = userData.referredBy;
 
-    if (referredBy) {
-        const firstLevelBonus = amount * 0.05; // 5% bonus
-        await db.runTransaction(async (transaction) => {
-            const referrerQuerySnapshot = await transaction.get(
-                db.collection('users').where("referredBy", "==", referredBy)
-            );
+        if (referredBy) {
+            const firstLevelBonus = amount * 0.05;
 
-            if (referrerQuerySnapshot.empty) throw new Error('Referrer does not exist');
+            await db.runTransaction(async (transaction) => {
+                const firstReferrerDoc = await transaction.get(
+                    db.collection('users').doc(referredBy).collection('dashboard').doc('current')
+                );
 
-            const referrerDoc = referrerQuerySnapshot.docs[0];
-            const newLevelIncome = (referrerDoc.data().levelIncome || 0) + firstLevelBonus;
-            transaction.update(referrerDoc.ref, { levelIncome: newLevelIncome });
-        });
+                if (!firstReferrerDoc.exists) throw new Error('First referrer does not exist');
 
-        // Second level
-        const firstReferrerQuerySnapshot = await db.collection('users')
-            .where("referredBy", "==", referredBy)
-            .get();
+                const firstReferrerData = firstReferrerDoc.data();
+                const newLevelIncome = (firstReferrerData.levelIncome || 0) + firstLevelBonus;
+                transaction.update(firstReferrerDoc.ref, { levelIncome: newLevelIncome });
+            });
 
-        if (!firstReferrerQuerySnapshot.empty) {
-            const firstReferrerDoc = firstReferrerQuerySnapshot.docs[0];
-            const secondReferredBy = firstReferrerDoc.data().referredBy;
+            const firstReferrerSnapshot = await db.collection('users').doc(referredBy).get();
+            const firstReferrerData = firstReferrerSnapshot.data();
+            const secondReferredBy = firstReferrerData.referredBy;
 
             if (secondReferredBy) {
-                const secondLevelBonus = amount * 0.03; // 3% bonus
+                const secondLevelBonus = amount * 0.03;
+
                 await db.runTransaction(async (transaction) => {
-                    const secondReferrerQuerySnapshot = await transaction.get(
-                        db.collection('users').where("referredBy", "==", secondReferredBy)
+                    const secondReferrerDoc = await transaction.get(
+                        db.collection('users').doc(secondReferredBy).collection('dashboard').doc('current')
                     );
 
-                    if (secondReferrerQuerySnapshot.empty) throw new Error('Second referrer does not exist');
+                    if (!secondReferrerDoc.exists) throw new Error('Second referrer does not exist');
 
-                    const secondReferrerDoc = secondReferrerQuerySnapshot.docs[0];
-                    const newLevelIncome = (secondReferrerDoc.data().levelIncome || 0) + secondLevelBonus;
+                    const secondReferrerData = secondReferrerDoc.data();
+                    const newLevelIncome = (secondReferrerData.levelIncome || 0) + secondLevelBonus;
                     transaction.update(secondReferrerDoc.ref, { levelIncome: newLevelIncome });
                 });
 
-                // Third level
-                const secondReferrerQuerySnapshot = await db.collection('users')
-                    .where("referredBy", "==", secondReferredBy)
-                    .get();
+                const secondReferrerSnapshot = await db.collection('users').doc(secondReferredBy).get();
+                const secondReferrerData = secondReferrerSnapshot.data();
+                const thirdReferredBy = secondReferrerData.referredBy;
 
-                if (!secondReferrerQuerySnapshot.empty) {
-                    const secondReferrerDoc = secondReferrerQuerySnapshot.docs[0];
-                    const thirdReferredBy = secondReferrerDoc.data().referredBy;
+                if (thirdReferredBy) {
+                    const thirdLevelBonus = amount * 0.01;
 
-                    if (thirdReferredBy) {
-                        const thirdLevelBonus = amount * 0.01; // 1% bonus
-                        await db.runTransaction(async (transaction) => {
-                            const thirdReferrerQuerySnapshot = await transaction.get(
-                                db.collection('users').where("referredBy", "==", thirdReferredBy)
-                            );
+                    await db.runTransaction(async (transaction) => {
+                        const thirdReferrerDoc = await transaction.get(
+                            db.collection('users').doc(thirdReferredBy).collection('dashboard').doc('current')
+                        );
 
-                            if (thirdReferrerQuerySnapshot.empty) throw new Error('Third referrer does not exist');
+                        if (!thirdReferrerDoc.exists) throw new Error('Third referrer does not exist');
 
-                            const thirdReferrerDoc = thirdReferrerQuerySnapshot.docs[0];
-                            const newLevelIncome = (thirdReferrerDoc.data().levelIncome || 0) + thirdLevelBonus;
-                            transaction.update(thirdReferrerDoc.ref, { levelIncome: newLevelIncome });
-                        });
-                    }
+                        const thirdReferrerData = thirdReferrerDoc.data();
+                        const newLevelIncome = (thirdReferrerData.levelIncome || 0) + thirdLevelBonus;
+                        transaction.update(thirdReferrerDoc.ref, { levelIncome: newLevelIncome });
+                    });
                 }
             }
         }
+    } catch (error) {
+        console.error('Error calculating referral bonus:', error.message);
     }
 };
+
+const getPackages = async (req, res) => {
+    try {
+        const packagesSnapshot = await db.collection('packages').get();
+        const packages = [];
+
+        packagesSnapshot.forEach(doc => {
+            packages.push({ id: doc.id, ...doc.data() });
+        });
+
+        res.status(200).send(packages);
+    } catch (error) {
+        res.status(500).send({ message: 'Error fetching packages', error: error.message });
+    }
+};
+
+
 
 const buyPackage = async (req, res) => {
     try {
         const userId = req.user?.uid || "test-user";
         const { packageName, amount, dailyIncome, totalRevenue, duration } = req.body;
-        const file = req.file; // Assuming the file is uploaded as 'file' field
+        const file = req.file;
 
         if (!userId || !packageName || !amount || !dailyIncome || !totalRevenue || !duration) {
             return res.status(400).send('Missing required fields');
         }
 
         const purchaseId = uuidv4();
-
-        // Upload the payment image
         const paymentImageUrl = await uploadImage(file);
+
+        const userDoc = await db.collection("user").doc(userId).get();
+
+        if (!userDoc.exists) {
+            return res.status(404).send('User not found');
+        }
+
+        const email = userDoc.data().email;
 
         const newPurchase = {
             id: purchaseId,
@@ -419,22 +391,20 @@ const buyPackage = async (req, res) => {
             dailyIncome,
             duration,
             totalRevenue,
+            email,
             status: 'pending',
             createdAt: new Date().toISOString(),
             roiAccumulated: 0,
             roiUpdatedDays: 0,
             walletUpdated: false,
             startDate: null,
-            paymentImageUrl // Store the image URL
+            paymentImageUrl
         };
 
-        // Save the new purchase request to Firestore
         await db.collection('purchases').doc(purchaseId).set(newPurchase);
 
-        // Calculate referral bonuses
         await calculateReferralBonus(userId, amount);
 
-        // Notify admin 
         console.log('Notify admin about the new purchase');
 
         res.status(201).send({ message: 'Package purchase request created successfully', purchase: newPurchase });
@@ -443,71 +413,6 @@ const buyPackage = async (req, res) => {
     }
 };
 
-
-// Function to update daily ROI
-const updateDailyROI = async () => {
-    const purchasesSnapshot = await db.collection('purchases')
-        .where('status', '==', 'active')
-        .get();
-
-    purchasesSnapshot.forEach(async (doc) => {
-        const purchase = doc.data();
-
-        if (purchase.roiUpdatedDays < 500) {
-            // Calculate daily ROI
-            const dailyROI = purchase.dailyIncome;
-
-            // Update the purchase document with the total number of days ROI has been updated
-            const updatedDays = purchase.roiUpdatedDays + 1;
-
-            // Accumulate ROI only for the first 20 days
-            let updatedROI = purchase.roiAccumulated;
-            if (purchase.roiUpdatedDays < 20) {
-                updatedROI += dailyROI;
-            }
-
-            await db.collection('purchases').doc(doc.id).update({
-                roiAccumulated: updatedROI,
-                roiUpdatedDays: updatedDays
-            });
-
-            // Update user's wallet balance if 30 days are completed and it has not been updated yet
-            if (updatedDays === 30 && !purchase.walletUpdated) {
-                const userRef = db.collection('users').doc(purchase.userId);
-                await db.runTransaction(async (transaction) => {
-                    const userDoc = await transaction.get(userRef);
-                    if (!userDoc.exists) {
-                        throw new Error('User does not exist');
-                    }
-
-                    const newWalletBalance = (userDoc.data().walletBalance || 0) + updatedROI;
-                    transaction.update(userRef, { walletBalance: newWalletBalance });
-
-                    // Mark the wallet as updated
-                    transaction.update(db.collection('purchases').doc(doc.id), { walletUpdated: true });
-                });
-            }
-
-            // Mark the purchase as completed after 500 days
-            if (updatedDays === 500) {
-                await db.collection('purchases').doc(doc.id).update({ status: 'completed' });
-            }
-        }
-    });
-};
-
-
-// Schedule the updateDailyROI function to run once every day at midnight
-cron.schedule('0 0 * * *', () => {
-    console.log('Running daily ROI update');
-    updateDailyROI().catch(console.error);
-});
-
-//for every minute to test
-// cron.schedule('* * * * *', () => {
-//     console.log('Running daily ROI update');
-//     updateDailyROI().catch(console.error);
-// });
 
 const withdrawAmount = async (req, res) => {
     try {
@@ -518,21 +423,33 @@ const withdrawAmount = async (req, res) => {
             return res.status(400).send('Invalid amount, minimum withdrawal is 500');
         }
 
-        // Generate a new withdrawal ID
+        // Get the user's current wallet balance
+        const userDoc = await db.collection('users').doc(userId).collection('dashboard').doc('current').get();
+
+        if (!userDoc.exists) {
+            return res.status(404).send('User not found');
+        }
+
+        const userData = userDoc.data();
+        const walletBalance = userData.walletBalance || 0;
+
+        if (amount > walletBalance) {
+            return res.status(400).send('Insufficient balance');
+        }
+
         const withdrawalId = uuidv4();
 
         const newWithdrawal = {
             id: withdrawalId,
             userId,
             amount,
+            walletBalance,
             status: 'pending',
             createdAt: new Date().toISOString()
         };
 
-        // Save the new withdrawal request to Firestore
         await db.collection('withdrawals').doc(withdrawalId).set(newWithdrawal);
 
-        // Notify admin (this is a placeholder, replace with actual notification logic)
         console.log('Notify admin about the new withdrawal');
 
         res.status(201).send({ message: 'Withdrawal request created successfully', withdrawal: newWithdrawal });
@@ -572,8 +489,8 @@ const getTransactions = async (req, res) => {
 
         if (operation && operation !== 'o1') {
             transactions = transactions.filter(transaction => {
-                if (operation === 'o2' && transaction.amount) return true; // Withdraw funds
-                if (operation === 'o3' && transaction.operation === 'deposit') return true; // Deposit funds
+                if (operation === 'o2' && transaction.amount) return true;
+                if (operation === 'o3' && transaction.operation === 'deposit') return true;
                 return false;
             });
         }
@@ -676,7 +593,7 @@ const createTicket = async (req, res) => {
 
 const getTickets = async (req, res) => {
     try {
-        const userId = req.user?.uid;   // replace this with actual user ID from req if needed
+        const userId = req.user?.uid;
         const ticketsSnapshot = await db.collection('tickets').where('userId', '==', userId).get();
 
         if (ticketsSnapshot.empty) {
@@ -693,7 +610,6 @@ const getTickets = async (req, res) => {
         res.status(500).send({ message: 'Error getting tickets', error: error.message });
     }
 };
-
 
 const allTransactions = async (req, res) => {
     const userId = req.user?.uid;
@@ -737,13 +653,13 @@ const filterTransactions = async (req, res) => {
 module.exports =
 {
     upload,
-    signUpUser,
     updateProfile,
     roitest,
     getDashboard,
     createDashboard,
     getTransactions,
     createTicket,
+    getPackages,
     buyPackage,
     withdrawAmount,
     getPurchaseStatus,
@@ -753,5 +669,7 @@ module.exports =
     filterTransactions,
     generateReferralLink,
     authVerifier,
-    getUserDetail
+    getUserDetail,
+    generateReferralCode,
+    validateReferralCode
 };
