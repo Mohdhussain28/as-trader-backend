@@ -151,7 +151,7 @@ app.use(authMiddleware);
 app.use("/user", require('./routes/userRoute'))
 
 app.get("/test", async (req, res) => {
-    res.status(200).send("hiiiii")
+    res.status(200).send("hiiiiii")
 });
 
 app.use((err, req, res, next) => {
