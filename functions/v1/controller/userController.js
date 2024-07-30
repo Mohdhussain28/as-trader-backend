@@ -64,7 +64,7 @@ const generateReferralLink = async (req, res) => {
             return res.status(404).send({ message: 'Sponsor ID not found' });
         }
 
-        res.status(200).send(`http://astrademumbai.com/sign-up.html/?ref=${sponsorId}`);
+        res.status(200).send(sponsorId);
     } catch (error) {
         res.status(500).send({ message: 'Error retrieving sponsor ID', error: error.message });
     }
@@ -289,61 +289,67 @@ const calculateReferralBonus = async (userId, amount) => {
             const firstLevelBonus = amount * 0.05;
 
             await db.runTransaction(async (transaction) => {
-                const firstReferrerDoc = await transaction.get(
-                    db.collection('users').doc(referredBy).collection('dashboard').doc('current')
-                );
+                const firstReferrerSnapshot = await db.collection('users').where('asTraderId', '==', referredBy).get();
 
-                if (!firstReferrerDoc.exists) throw new Error('First referrer does not exist');
+                if (firstReferrerSnapshot.empty) throw new Error('First referrer does not exist');
 
+                const firstReferrerDoc = firstReferrerSnapshot.docs[0];
                 const firstReferrerData = firstReferrerDoc.data();
-                const newLevelIncome = (firstReferrerData.levelIncome || 0) + firstLevelBonus;
-                transaction.update(firstReferrerDoc.ref, { levelIncome: newLevelIncome });
-            });
+                const firstDashboardRef = firstReferrerDoc.ref.collection('dashboard').doc('current');
+                const firstDashboardDoc = await transaction.get(firstDashboardRef);
 
-            const firstReferrerSnapshot = await db.collection('users').doc(referredBy).get();
-            const firstReferrerData = firstReferrerSnapshot.data();
-            const secondReferredBy = firstReferrerData.referredBy;
+                if (!firstDashboardDoc.exists) throw new Error('First referrer dashboard does not exist');
 
-            if (secondReferredBy) {
-                const secondLevelBonus = amount * 0.03;
+                const firstDashboardData = firstDashboardDoc.data();
+                const newLevelIncome = (firstDashboardData.levelIncome || 0) + firstLevelBonus;
+                transaction.update(firstDashboardRef, { levelIncome: newLevelIncome });
 
-                await db.runTransaction(async (transaction) => {
-                    const secondReferrerDoc = await transaction.get(
-                        db.collection('users').doc(secondReferredBy).collection('dashboard').doc('current')
-                    );
+                const secondReferredBy = firstReferrerData.referredBy;
+                if (secondReferredBy) {
+                    const secondLevelBonus = amount * 0.03;
 
-                    if (!secondReferrerDoc.exists) throw new Error('Second referrer does not exist');
+                    const secondReferrerSnapshot = await db.collection('users').where('asTraderId', '==', secondReferredBy).get();
 
+                    if (secondReferrerSnapshot.empty) throw new Error('Second referrer does not exist');
+
+                    const secondReferrerDoc = secondReferrerSnapshot.docs[0];
                     const secondReferrerData = secondReferrerDoc.data();
-                    const newLevelIncome = (secondReferrerData.levelIncome || 0) + secondLevelBonus;
-                    transaction.update(secondReferrerDoc.ref, { levelIncome: newLevelIncome });
-                });
+                    const secondDashboardRef = secondReferrerDoc.ref.collection('dashboard').doc('current');
+                    const secondDashboardDoc = await transaction.get(secondDashboardRef);
 
-                const secondReferrerSnapshot = await db.collection('users').doc(secondReferredBy).get();
-                const secondReferrerData = secondReferrerSnapshot.data();
-                const thirdReferredBy = secondReferrerData.referredBy;
+                    if (!secondDashboardDoc.exists) throw new Error('Second referrer dashboard does not exist');
 
-                if (thirdReferredBy) {
-                    const thirdLevelBonus = amount * 0.01;
+                    const secondDashboardData = secondDashboardDoc.data();
+                    const newSecondLevelIncome = (secondDashboardData.levelIncome || 0) + secondLevelBonus;
+                    transaction.update(secondDashboardRef, { levelIncome: newSecondLevelIncome });
 
-                    await db.runTransaction(async (transaction) => {
-                        const thirdReferrerDoc = await transaction.get(
-                            db.collection('users').doc(thirdReferredBy).collection('dashboard').doc('current')
-                        );
+                    const thirdReferredBy = secondReferrerData.referredBy;
+                    if (thirdReferredBy) {
+                        const thirdLevelBonus = amount * 0.01;
 
-                        if (!thirdReferrerDoc.exists) throw new Error('Third referrer does not exist');
+                        const thirdReferrerSnapshot = await db.collection('users').where('asTraderId', '==', thirdReferredBy).get();
 
+                        if (thirdReferrerSnapshot.empty) throw new Error('Third referrer does not exist');
+
+                        const thirdReferrerDoc = thirdReferrerSnapshot.docs[0];
                         const thirdReferrerData = thirdReferrerDoc.data();
-                        const newLevelIncome = (thirdReferrerData.levelIncome || 0) + thirdLevelBonus;
-                        transaction.update(thirdReferrerDoc.ref, { levelIncome: newLevelIncome });
-                    });
+                        const thirdDashboardRef = thirdReferrerDoc.ref.collection('dashboard').doc('current');
+                        const thirdDashboardDoc = await transaction.get(thirdDashboardRef);
+
+                        if (!thirdDashboardDoc.exists) throw new Error('Third referrer dashboard does not exist');
+
+                        const thirdDashboardData = thirdDashboardDoc.data();
+                        const newThirdLevelIncome = (thirdDashboardData.levelIncome || 0) + thirdLevelBonus;
+                        transaction.update(thirdDashboardRef, { levelIncome: newThirdLevelIncome });
+                    }
                 }
-            }
+            });
         }
     } catch (error) {
         console.error('Error calculating referral bonus:', error.message);
     }
 };
+
 
 const getPackages = async (req, res) => {
     try {
@@ -368,7 +374,7 @@ const buyPackage = async (req, res) => {
         const { packageName, amount, dailyIncome, totalRevenue, duration } = req.body;
         const file = req.file;
 
-        if (!userId || !packageName || !amount || !dailyIncome || !totalRevenue || !duration) {
+        if (!userId || !packageName || amount === undefined || dailyIncome === undefined || totalRevenue === undefined || duration === undefined) {
             return res.status(400).send('Missing required fields');
         }
 
@@ -387,10 +393,10 @@ const buyPackage = async (req, res) => {
             id: purchaseId,
             userId,
             packageName,
-            amount,
-            dailyIncome,
-            duration,
-            totalRevenue,
+            amount: Number(amount),
+            dailyIncome: Number(dailyIncome),
+            duration: Number(duration),
+            totalRevenue: Number(totalRevenue),
             email,
             status: 'pending',
             createdAt: new Date().toISOString(),
@@ -403,7 +409,7 @@ const buyPackage = async (req, res) => {
 
         await db.collection('purchases').doc(purchaseId).set(newPurchase);
 
-        await calculateReferralBonus(userId, amount);
+        await calculateReferralBonus(userId, Number(amount));
 
         console.log('Notify admin about the new purchase');
 
@@ -412,6 +418,7 @@ const buyPackage = async (req, res) => {
         res.status(500).send({ message: 'Error creating purchase request', error: error.message });
     }
 };
+
 
 
 const withdrawAmount = async (req, res) => {

@@ -4,6 +4,7 @@ const bucket = admin.storage().bucket();
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const { generateReferralCode } = require("./userController");
 
 const multerStorage = multer.memoryStorage();
 const upload = multer({ storage: multerStorage });
@@ -45,12 +46,13 @@ const adminSignUp = async (req, res) => {
             email,
             password
         });
-
+        const sponsorId = await generateReferralCode(userRecord.uid)
         // Add the user to the 'admins' collection
         const adminRef = db.collection('admins').doc(userRecord.uid);
         await adminRef.set({
             email: userRecord.email,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            sponsorId
         });
 
         res.status(201).send({ message: 'Admin signed up successfully', uid: userRecord.uid });
@@ -319,6 +321,7 @@ const getAllPackages = async (req, res) => {
     try {
         const snapshot = await db.collection('packages').get();
         const packages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        packages.sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
         res.status(200).send({ packages });
     } catch (error) {
         res.status(500).send({ message: 'Error retrieving packages', error: error.message });
