@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router()
-const { upload, getDashboard, createDashboard, createTicket, buyPackage, getPurchaseStatus, getTickets, partnerList, allTransactions, filterTransactions, uploadFiles, withdrawAmount, getTransactions, roitest, updateProfile, generateReferralLink, authVerifier, getUserDetail, getPackages } = require("../controller/userController");
+const { upload, getDashboard, createDashboard, createTicket, buyPackage, getPurchaseStatus, getTickets, partnerList, allTransactions, filterTransactions, uploadFiles, withdrawAmount, getTransactions, roitest, updateProfile, generateReferralLink, authVerifier, getUserDetail, getPackages, transferAmount, updateAccountDetails, getAccountDetails } = require("../controller/userController");
 
 router.route("/get-dashboard").get(getDashboard)
 router.route("/create-dashboard").post(createDashboard)
@@ -26,6 +26,11 @@ router.route("/generatereferrallink").get(generateReferralLink)
 router.route("/verify-auth").get(authVerifier)
 
 router.route("/user-detail").get(getUserDetail)
+
+router.route("/transfer-amount").post(transferAmount)
+
+router.route("/account-details").post(updateAccountDetails)
+router.route("/account-details").get(getAccountDetails)
 
 // router.route("/generateReferralCodes").post(generateReferralCodes)
 // router.route("/initializeReferralCodes").post(initializeReferralCodesForAllUsers)

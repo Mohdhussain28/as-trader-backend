@@ -188,7 +188,7 @@ const updateProfile = async (req, res) => {
 };
 
 
-const getReferredUsers = async (sponsorId) => {
+const getReferredUsers = async (sponsorId, level = 1, counts = { direct: 0, total: 0 }) => {
     const usersRef = db.collection('users');
     const snapshot = await usersRef.where('referredBy', '==', sponsorId).get();
 
@@ -197,9 +197,20 @@ const getReferredUsers = async (sponsorId) => {
     }
 
     let referredUsers = [];
-    snapshot.forEach(doc => {
-        referredUsers.push({ id: doc.id, ...doc.data() });
-    });
+    for (const doc of snapshot.docs) {
+        const userData = { id: doc.id, ...doc.data(), level };
+        referredUsers.push(userData);
+
+        // Increment the appropriate counters
+        counts.total += 1;
+        if (level === 1) {
+            counts.direct += 1;
+        }
+
+        // Fetch referred users of this user
+        const nestedReferredUsers = await getReferredUsers(userData.asTraderId, level + 1, counts);
+        referredUsers = referredUsers.concat(nestedReferredUsers);
+    }
 
     return referredUsers;
 };
@@ -207,17 +218,28 @@ const getReferredUsers = async (sponsorId) => {
 const partnerList = async (req, res) => {
     try {
         const sponsorId = req.query.sponsorId;
-        const referredUsers = await getReferredUsers(sponsorId);
+        const counts = { direct: 0, total: 0 };
+        const referredUsers = await getReferredUsers(sponsorId, 1, counts);
 
         if (referredUsers.length === 0) {
             return res.status(404).send({ message: 'No referred users found' });
         }
 
+        // Save the counts to the user's dashboard
+        const userDashboardRef = db.collection('users').doc(sponsorId).collection('dashboard').doc('current');
+        await userDashboardRef.set({
+            directMembers: counts.direct,
+            totalDownline: counts.total
+        }, { merge: true });
+
         res.status(200).send(referredUsers);
     } catch (error) {
         res.status(500).send({ message: 'Error retrieving referred users', error: error.message });
     }
-}
+};
+
+
+
 
 const getDashboard = async (req, res) => {
     try {
@@ -366,6 +388,49 @@ const getPackages = async (req, res) => {
     }
 };
 
+const transferAmount = async (req, res) => {
+    try {
+        const userId = req.body?.userId;
+        const transferAmount = Number(req.body.amount);
+
+        if (!userId || isNaN(transferAmount) || transferAmount <= 0) {
+            return res.status(400).send('Invalid userId or amount');
+        }
+
+        const userRef = db.collection('users').doc(userId);
+        const dashboardRef = userRef.collection('dashboard').doc('current');
+
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            const dashboardDoc = await transaction.get(dashboardRef);
+
+            if (!userDoc.exists || !dashboardDoc.exists) {
+                throw new Error('User or dashboard document does not exist');
+            }
+
+            const dashboardData = dashboardDoc.data();
+            const currentLevelIncome = dashboardData.levelIncome || 0;
+            const lastTransferredAmount = dashboardData.lastTransferredAmount || 0;
+            const newIncomeToTransfer = currentLevelIncome - lastTransferredAmount;
+
+            if (newIncomeToTransfer <= 0 || newIncomeToTransfer < transferAmount) {
+                throw new Error('Insufficient new levelIncome to transfer');
+            }
+
+            const newWalletBalance = (dashboardData.walletBalance || 0) + transferAmount;
+            const newLastTransferredAmount = lastTransferredAmount + transferAmount;
+
+            transaction.update(dashboardRef, {
+                walletBalance: newWalletBalance,
+                lastTransferredAmount: newLastTransferredAmount
+            });
+        });
+
+        res.status(200).send({ message: 'Transfer successful' });
+    } catch (error) {
+        res.status(500).send({ message: 'Error transferring levelIncome', error: error.message });
+    }
+};
 
 
 const buyPackage = async (req, res) => {
@@ -444,15 +509,24 @@ const withdrawAmount = async (req, res) => {
             return res.status(400).send('Insufficient balance');
         }
 
+        // Deduct 10% service charge
+        const serviceCharge = amount * 0.10;
+        const netAmount = amount - serviceCharge;
+
         const withdrawalId = uuidv4();
+        const d = await db.collection('users').doc(userId).get();
+        const detail = d.data();
 
         const newWithdrawal = {
             id: withdrawalId,
             userId,
-            amount,
+            amount: netAmount,
+            email: detail.email,
+            asTraderId: detail.asTraderId,
             walletBalance,
             status: 'pending',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            serviceCharge: serviceCharge
         };
 
         await db.collection('withdrawals').doc(withdrawalId).set(newWithdrawal);
@@ -656,6 +730,55 @@ const filterTransactions = async (req, res) => {
     }
 }
 
+const updateAccountDetails = async (req, res) => {
+    const userId = req.user?.uid;
+    const { google_pay, phone_pay, account_holder_name, bank_name, account_number, ifsc_code } = req.body;
+
+    try {
+        const userDoc = db.collection('users').doc(userId);
+        const doc = await userDoc.get();
+
+        const accountDetails = {
+            google_pay,
+            phone_pay,
+            account_holder_name,
+            bank_name,
+            account_number,
+            ifsc_code
+        };
+
+        if (doc.exists) {
+            await userDoc.update({ accountDetails });
+        } else {
+            await userDoc.set({ accountDetails });
+        }
+
+        res.status(200).send('Account details updated successfully');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: 'Error updating account details' });
+    }
+};
+const getAccountDetails = async (req, res) => {
+    const userId = req.user?.uid;
+
+    try {
+        const userDoc = db.collection('users').doc(userId);
+        const doc = await userDoc.get();
+
+        if (doc.exists) {
+            const { accountDetails } = doc.data();
+            res.status(200).send(accountDetails);
+        } else {
+            res.status(404).send('User not found');
+        }
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: 'Error retrieving account details' });
+    }
+};
+
+
 
 module.exports =
 {
@@ -678,5 +801,8 @@ module.exports =
     authVerifier,
     getUserDetail,
     generateReferralCode,
-    validateReferralCode
+    validateReferralCode,
+    transferAmount,
+    updateAccountDetails,
+    getAccountDetails
 };

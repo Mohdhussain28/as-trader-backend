@@ -1,12 +1,12 @@
 const express = require("express");
 const router = express.Router()
-const { upload, approvePurchase, checkPurchases, checkWithdrawals, usersList, downloadImage, getTickets, updateTicketStatus, createPackage, deletePackage, getAllPackages, getPackage, updatePackage, updateWithdrawlStatus, adminSignUp, checkAdmin } = require("../controller/adminController");
+const { upload, approvePurchase, checkPurchases, checkWithdrawals, usersList, downloadImage, getTickets, updateTicketStatus, createPackage, deletePackage, getAllPackages, getPackage, updatePackage, updateWithdrawlStatus, adminSignUp, checkAdmin, serachUser } = require("../controller/adminController");
 
 router.route("/admin-sign-up").post(adminSignUp)
 router.route("/admin-verifier").get(checkAdmin)
 router.route("/approve-purchase").post(approvePurchase);
 router.route("/check-purchase").get(checkPurchases)
-
+router.route("/searchUser").get(serachUser)
 
 router.route("/check-withdrawl").get(checkWithdrawals)
 router.route("/withdrawals/:id/:status").patch(updateWithdrawlStatus)

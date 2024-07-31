@@ -186,13 +186,45 @@ const updateWithdrawlStatus = async (req, res) => {
         }
 
         const withdrawalRef = db.collection('withdrawals').doc(id);
-        await withdrawalRef.update({ status });
+
+        // Start a transaction
+        await db.runTransaction(async (transaction) => {
+            const withdrawalDoc = await transaction.get(withdrawalRef);
+
+            if (!withdrawalDoc.exists) {
+                throw new Error('Withdrawal not found');
+            }
+
+            const withdrawalData = withdrawalDoc.data();
+
+            // Update the withdrawal status
+            transaction.update(withdrawalRef, { status });
+
+            if (status === 'Accepted') {
+                const userId = withdrawalData.userId;
+                const amount = withdrawalData.amount;
+                const dashboardRef = db.collection('user').doc(userId).collection('dashboard').doc('current');
+
+                const dashboardDoc = await transaction.get(dashboardRef);
+
+                if (!dashboardDoc.exists) {
+                    throw new Error('User dashboard not found');
+                }
+
+                const dashboardData = dashboardDoc.data();
+                const newWalletBalance = dashboardData.walletBalance - amount;
+
+                // Update the wallet balance
+                transaction.update(dashboardRef, { walletBalance: newWalletBalance });
+            }
+        });
 
         res.status(200).send({ message: 'Withdrawal status updated successfully' });
     } catch (error) {
         res.status(500).send({ message: 'Error updating withdrawal status', error: error.message });
     }
 }
+
 
 const getTickets = async (req, res) => {
     try {
@@ -359,5 +391,38 @@ const updatePackage = async (req, res) => {
     }
 };
 
+const serachUser = async (req, res) => {
+    try {
+        const { email, fullName, asTraderId } = req.query;
 
-module.exports = { upload, approvePurchase, checkPurchases, checkWithdrawals, updateWithdrawlStatus, usersList, getTickets, downloadImage, updateTicketStatus, deletePackage, createPackage, getAllPackages, getPackage, updatePackage, adminSignUp, checkAdmin };
+        if (!email && !fullName && !asTraderId) {
+            return res.status(400).send('At least one search parameter must be provided');
+        }
+
+        let query = db.collection('users');
+
+        if (email) {
+            query = query.where('email', '==', email);
+        } else if (fullName) {
+            query = query.where('fullName', '==', fullName);
+        } else if (asTraderId) {
+            query = query.where('asTraderId', '==', asTraderId);
+        }
+
+        const snapshot = await query.get();
+
+        if (snapshot.empty) {
+            return res.status(404).send('No matching user found');
+        }
+
+        const users = [];
+        snapshot.forEach(doc => {
+            users.push(doc.data());
+        });
+
+        res.status(200).send({ message: 'Users retrieved successfully', users });
+    } catch (error) {
+        res.status(500).send({ message: 'Error searching for user', error: error.message });
+    }
+};
+module.exports = { upload, serachUser, approvePurchase, checkPurchases, checkWithdrawals, updateWithdrawlStatus, usersList, getTickets, downloadImage, updateTicketStatus, deletePackage, createPackage, getAllPackages, getPackage, updatePackage, adminSignUp, checkAdmin };

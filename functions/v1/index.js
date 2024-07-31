@@ -72,60 +72,122 @@ app.post("/signup", async (req, res) => {
         res.status(500).send({ message: 'Error signing up user', error: error.message });
     }
 });
-
-
-
-
 async function updateDailyROI() {
     const purchasesSnapshot = await db.collection('purchases')
-        .where('status', '==', 'active')
+        .where('status', '==', 'yasir')
         .get();
+
+    const currentDate = new Date();
+    const currentDay = currentDate.getDay(); // 0 (Sunday) to 6 (Saturday)
+    const currentMonth = currentDate.getMonth(); // 0 (January) to 11 (December)
+    const currentYear = currentDate.getFullYear();
+
+    // Function to determine the two random days in the current month (excluding Sundays and Saturdays)
+    const getRandomDays = () => {
+        const days = [];
+        while (days.length < 2) {
+            const randomDay = Math.floor(Math.random() * 28) + 1; // Random day between 1 and 28
+            const dayOfWeek = new Date(currentYear, currentMonth, randomDay).getDay();
+            if (dayOfWeek !== 0 && dayOfWeek !== 6 && !days.includes(randomDay)) {
+                days.push(randomDay);
+            }
+        }
+        return days;
+    };
+
+    // Retrieve or generate the excluded days for the current month
+    const excludedDaysDoc = await db.collection('excludedDays').doc(`${currentYear}-${currentMonth + 1}`).get();
+    let excludedDays;
+    if (excludedDaysDoc.exists) {
+        excludedDays = excludedDaysDoc.data().days;
+    } else {
+        excludedDays = getRandomDays();
+        await db.collection('excludedDays').doc(`${currentYear}-${currentMonth + 1}`).set({ days: excludedDays });
+    }
+
+    const todayDate = currentDate.getDate();
+    const isExcludedDay = currentDay === 0 || currentDay === 6 || excludedDays.includes(todayDate);
 
     purchasesSnapshot.forEach(async (doc) => {
         const purchase = doc.data();
 
-        if (purchase.roiUpdatedDays < 500) {
-            const currentDate = new Date();
-            const currentDay = currentDate.getDay();
+        if (purchase.roiUpdatedDays < 500 && !isExcludedDay) {
+            const dailyROI = purchase.dailyIncome;
+            const updatedDays = purchase.roiUpdatedDays + 1;
+            const updatedROI = purchase.roiAccumulated + dailyROI;
 
-            if (currentDay !== 0) {
-                const dailyROI = purchase.dailyIncome;
+            const userRef = db.collection('users').doc(purchase.userId);
+            const dashboardRef = userRef.collection('dashboard').doc('current');
+            const purchaseRef = db.collection('purchases').doc(doc.id);
 
-                const updatedDays = purchase.roiUpdatedDays + 1;
-                const updatedROI = purchase.roiAccumulated + dailyROI;
+            await db.runTransaction(async (transaction) => {
+                const dashboardDoc = await transaction.get(dashboardRef);
+                if (!dashboardDoc.exists) {
+                    throw new Error('Dashboard document does not exist');
+                }
 
-                await db.collection('purchases').doc(doc.id).update({
-                    roiAccumulated: updatedROI,
-                    roiUpdatedDays: updatedDays
-                });
+                const userDoc = await transaction.get(userRef);
+                const referredById = userDoc.data().referredBy;
+                let referredByDashboardDoc;
+                let referredByQuery;
+                if (referredById) {
+                    referredByQuery = await db.collection('users')
+                        .where('asTraderId', '==', referredById)
+                        .get();
 
-                if (updatedDays % 30 === 0 && !purchase.roiWalletUpdated) {
-                    const userRef = db.collection('users').doc(purchase.userId);
-                    await db.runTransaction(async (transaction) => {
-                        const userDoc = await transaction.get(userRef);
-                        if (!userDoc.exists) {
-                            throw new Error('User does not exist');
+                    if (!referredByQuery.empty) {
+                        const referredByUser = referredByQuery.docs[0];
+                        const referredByUserId = referredByUser.id;
+                        const referredByDashboardRef = db.collection('users').doc(referredByUserId).collection('dashboard').doc('current');
+                        referredByDashboardDoc = await transaction.get(referredByDashboardRef);
+
+                        if (!referredByDashboardDoc.exists) {
+                            referredByDashboardDoc = null;
                         }
+                    }
+                }
 
-                        const dashboardRef = userRef.collection('dashboard').doc('current');
-                        const dashboardDoc = await transaction.get(dashboardRef);
+                const currentROI = dashboardDoc.data().roi || 0;
+                const updatedDailyROI = currentROI + dailyROI;
 
-                        if (!dashboardDoc.exists) {
-                            throw new Error('Dashboard document does not exist');
-                        }
+                if (updatedDays % 30 === 0) {
+                    const currentWalletBalance = dashboardDoc.data().walletBalance || 0;
+                    const newWalletBalance = currentWalletBalance + updatedDailyROI;
 
-                        const currentROIWallet = dashboardDoc.data().roiWallet || 0;
-                        const newROIWallet = currentROIWallet + updatedROI;
-                        transaction.update(dashboardRef, { roiWallet: newROIWallet });
+                    transaction.update(dashboardRef, {
+                        roi: 0,
+                        walletBalance: newWalletBalance,
+                    });
 
-                        transaction.update(db.collection('purchases').doc(doc.id), { roiWalletUpdated: true });
+                    if (referredByDashboardDoc) {
+                        const referredByROIWallet = referredByDashboardDoc.data().roiWallet || 0;
+                        const referralBonus = updatedDailyROI * 0.1;
+                        const newReferredByROIWallet = referredByROIWallet + referralBonus;
+
+                        const referredByUserId = referredByQuery.docs[0].id;
+                        console.log("object", referredByUserId)
+                        const referredByDashboardRef = db.collection('users').doc(referredByUserId).collection('dashboard').doc('current');
+                        transaction.update(referredByDashboardRef, {
+                            roiWallet: newReferredByROIWallet
+                        });
+                    }
+
+                    transaction.update(purchaseRef, { roiWalletUpdated: true });
+                } else {
+                    transaction.update(dashboardRef, {
+                        roi: updatedDailyROI,
                     });
                 }
 
                 if (updatedDays === 500) {
-                    await db.collection('purchases').doc(doc.id).update({ status: 'completed' });
+                    transaction.update(purchaseRef, { status: 'completed' });
                 }
-            }
+
+                transaction.update(purchaseRef, {
+                    roiAccumulated: updatedROI,
+                    roiUpdatedDays: updatedDays
+                });
+            });
         }
     });
 }
