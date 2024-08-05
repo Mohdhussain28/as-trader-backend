@@ -74,19 +74,17 @@ app.post("/signup", async (req, res) => {
 });
 async function updateDailyROI() {
     const purchasesSnapshot = await db.collection('purchases')
-        .where('status', '==', 'yasir')
+        .where('status', '==', 'active')
         .get();
 
     const currentDate = new Date();
-    const currentDay = currentDate.getDay(); // 0 (Sunday) to 6 (Saturday)
-    const currentMonth = currentDate.getMonth(); // 0 (January) to 11 (December)
+    const currentDay = currentDate.getDay();
+    const currentMonth = currentDate.getMonth();
     const currentYear = currentDate.getFullYear();
 
-    // Function to determine the two random days in the current month (excluding Sundays and Saturdays)
     const getRandomDays = () => {
         const days = [];
         while (days.length < 2) {
-            const randomDay = Math.floor(Math.random() * 28) + 1; // Random day between 1 and 28
             const dayOfWeek = new Date(currentYear, currentMonth, randomDay).getDay();
             if (dayOfWeek !== 0 && dayOfWeek !== 6 && !days.includes(randomDay)) {
                 days.push(randomDay);
@@ -95,7 +93,6 @@ async function updateDailyROI() {
         return days;
     };
 
-    // Retrieve or generate the excluded days for the current month
     const excludedDaysDoc = await db.collection('excludedDays').doc(`${currentYear}-${currentMonth + 1}`).get();
     let excludedDays;
     if (excludedDaysDoc.exists) {
@@ -106,8 +103,9 @@ async function updateDailyROI() {
     }
 
     const todayDate = currentDate.getDate();
-    const isExcludedDay = currentDay === 0 || currentDay === 6 || excludedDays.includes(todayDate);
-
+    const isExcludedDay = currentDay === 5 || currentDay === 6 || excludedDays.includes(todayDate);
+    console.log("day", currentDay)
+    console.log("todayDate", todayDate)
     purchasesSnapshot.forEach(async (doc) => {
         const purchase = doc.data();
 
@@ -191,7 +189,6 @@ async function updateDailyROI() {
         }
     });
 }
-
 
 
 // Schedule the cron job to run daily at midnight

@@ -389,49 +389,86 @@ const getPackages = async (req, res) => {
 };
 
 const transferAmount = async (req, res) => {
-    try {
-        const userId = req.body?.userId;
-        const transferAmount = Number(req.body.amount);
+    const userId = req.user?.uid;
+    const { source, amount } = req.body;
 
-        if (!userId || isNaN(transferAmount) || transferAmount <= 0) {
-            return res.status(400).send('Invalid userId or amount');
+    if (!userId || !source || !amount) {
+        return res.status(400).send({ error: 'userId, source, and amount are required fields.' });
+    }
+
+    // Define the source fields in Firestore
+    const validSources = ['levelIncome', 'awardReward', 'roiWallet'];
+    if (!validSources.includes(source)) {
+        return res.status(400).send({ error: 'Invalid source provided.' });
+    }
+
+    try {
+        const userDashboardRef = db.collection('users').doc(userId).collection('dashboard').doc('current');
+        const userDashboardDoc = await userDashboardRef.get();
+
+        if (!userDashboardDoc.exists) {
+            return res.status(404).send({ error: 'User dashboard not found.' });
         }
 
-        const userRef = db.collection('users').doc(userId);
-        const dashboardRef = userRef.collection('dashboard').doc('current');
+        const userDashboardData = userDashboardDoc.data();
+        const sourceAmount = userDashboardData[source];
+        const walletBalance = userDashboardData.walletBalance || 0;
 
-        await db.runTransaction(async (transaction) => {
-            const userDoc = await transaction.get(userRef);
-            const dashboardDoc = await transaction.get(dashboardRef);
+        if (sourceAmount < amount) {
+            return res.status(400).send({ error: 'Insufficient funds in the specified source.' });
+        }
 
-            if (!userDoc.exists || !dashboardDoc.exists) {
-                throw new Error('User or dashboard document does not exist');
-            }
+        // Update the source and wallet balance
+        const updatedSourceAmount = sourceAmount - amount;
+        const updatedWalletBalance = walletBalance + amount;
 
-            const dashboardData = dashboardDoc.data();
-            const currentLevelIncome = dashboardData.levelIncome || 0;
-            const lastTransferredAmount = dashboardData.lastTransferredAmount || 0;
-            const newIncomeToTransfer = currentLevelIncome - lastTransferredAmount;
-
-            if (newIncomeToTransfer <= 0 || newIncomeToTransfer < transferAmount) {
-                throw new Error('Insufficient new levelIncome to transfer');
-            }
-
-            const newWalletBalance = (dashboardData.walletBalance || 0) + transferAmount;
-            const newLastTransferredAmount = lastTransferredAmount + transferAmount;
-
-            transaction.update(dashboardRef, {
-                walletBalance: newWalletBalance,
-                lastTransferredAmount: newLastTransferredAmount
-            });
+        await userDashboardRef.update({
+            [source]: updatedSourceAmount,
+            walletBalance: updatedWalletBalance
         });
 
-        res.status(200).send({ message: 'Transfer successful' });
+        // Save the fund transfer detail
+        const fundTransferRef = db.collection('fundTransfer').doc();
+        await fundTransferRef.set({
+            userId: userId,
+            source: source,
+            amount: amount,
+            timestamp: new Date().toISOString()
+        });
+
+        return res.status(200).send({
+            message: 'Transfer successful',
+            source: updatedSourceAmount,
+            walletBalance: updatedWalletBalance
+        });
+
     } catch (error) {
-        res.status(500).send({ message: 'Error transferring levelIncome', error: error.message });
+        console.error('Error transferring amount: ', error);
+        return res.status(500).send({ error: 'Internal Server Error' });
     }
 };
 
+const getTransferAmount = async (req, res) => {
+    const userId = req.user?.uid
+
+    try {
+        const transferSnapshot = await db.collection('fundTransfer').where('userId', '==', userId).get();
+        const transferDetails = [];
+
+        transferSnapshot.forEach(doc => {
+            transferDetails.push({ id: doc.id, ...doc.data() });
+        });
+
+        if (transferDetails.length === 0) {
+            return res.status(404).send({ error: 'No transfer details found for the specified user.' });
+        }
+
+        res.status(200).send(transferDetails);
+    } catch (error) {
+        console.error('Error getting transfer details: ', error);
+        res.status(500).send({ error: 'Internal Server Error' });
+    }
+}
 
 const buyPackage = async (req, res) => {
     try {
@@ -506,7 +543,7 @@ const withdrawAmount = async (req, res) => {
         const walletBalance = userData.walletBalance || 0;
 
         if (amount > walletBalance) {
-            return res.status(400).send('Insufficient balance');
+            return res.status(400).send({ message: 'Insufficient balance' });
         }
 
         // Deduct 10% service charge
@@ -520,7 +557,8 @@ const withdrawAmount = async (req, res) => {
         const newWithdrawal = {
             id: withdrawalId,
             userId,
-            amount: netAmount,
+            netAmount,
+            amount,
             email: detail.email,
             asTraderId: detail.asTraderId,
             walletBalance,
@@ -536,6 +574,30 @@ const withdrawAmount = async (req, res) => {
         res.status(201).send({ message: 'Withdrawal request created successfully', withdrawal: newWithdrawal });
     } catch (error) {
         res.status(500).send({ message: 'Error creating withdrawal request', error: error.message });
+    }
+};
+
+const getWithdrawals = async (req, res) => {
+    try {
+        const userId = req.user?.uid;
+        if (!userId) {
+            return res.status(400).send('User ID not found');
+        }
+
+        const withdrawalsSnapshot = await db.collection('withdrawals').where('userId', '==', userId).get();
+
+        if (withdrawalsSnapshot.empty) {
+            return res.status(404).send('No withdrawals found for the user');
+        }
+
+        const withdrawals = [];
+        withdrawalsSnapshot.forEach(doc => {
+            withdrawals.push(doc.data());
+        });
+
+        res.status(200).send(withdrawals);
+    } catch (error) {
+        res.status(500).send({ message: 'Error fetching withdrawals', error: error.message });
     }
 };
 
@@ -804,5 +866,7 @@ module.exports =
     validateReferralCode,
     transferAmount,
     updateAccountDetails,
-    getAccountDetails
+    getAccountDetails,
+    getWithdrawals,
+    getTransferAmount
 };

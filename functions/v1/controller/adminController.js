@@ -197,13 +197,10 @@ const updateWithdrawlStatus = async (req, res) => {
 
             const withdrawalData = withdrawalDoc.data();
 
-            // Update the withdrawal status
-            transaction.update(withdrawalRef, { status });
-
             if (status === 'Accepted') {
                 const userId = withdrawalData.userId;
                 const amount = withdrawalData.amount;
-                const dashboardRef = db.collection('user').doc(userId).collection('dashboard').doc('current');
+                const dashboardRef = db.collection('users').doc(userId).collection('dashboard').doc('current');
 
                 const dashboardDoc = await transaction.get(dashboardRef);
 
@@ -214,8 +211,12 @@ const updateWithdrawlStatus = async (req, res) => {
                 const dashboardData = dashboardDoc.data();
                 const newWalletBalance = dashboardData.walletBalance - amount;
 
-                // Update the wallet balance
+                // Ensure all reads are done before writes
+                transaction.update(withdrawalRef, { status });
                 transaction.update(dashboardRef, { walletBalance: newWalletBalance });
+            } else {
+                // Update the withdrawal status only
+                transaction.update(withdrawalRef, { status });
             }
         });
 
@@ -223,7 +224,8 @@ const updateWithdrawlStatus = async (req, res) => {
     } catch (error) {
         res.status(500).send({ message: 'Error updating withdrawal status', error: error.message });
     }
-}
+};
+
 
 
 const getTickets = async (req, res) => {
